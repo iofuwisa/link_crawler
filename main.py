@@ -8,15 +8,29 @@ import math
 import random
 import time
 import logging
-import csv
 import os
+import csv
 from requests.exceptions import Timeout
+import json
+
+# site_crawler API
+siteCrawlerApi = ""
 
 # アクセス禁止ドメインリスト
 protectList = []
 
 # クローリングサイトリスト
 siteList = []
+
+def setApiUrl():
+    global siteCrawlerApi
+    with open('secret/secret.json') as f:
+        sss = json.load(f)
+        # print(sss)
+        # print(sss["site_crawler_api"])
+        siteCrawlerApi = sss["site_crawler_api"]
+
+
 
 # アクセス禁止ドメインリストを取得
 def getProtectList():
@@ -29,16 +43,14 @@ def getProtectList():
                 protectList.append(row[0])
 
 # 登録済みサイトリストからランダムサイトを一つ返す
-def nextRoot():
-    # ルートリスト取得
-    if os.path.isfile("sitelist.csv"):
-        with open ("sitelist.csv", mode="r") as f :
-            rootList = []
-            reader = csv.reader(f)
-            for row in reader:
-                rootList.append(row[0])
-            return rootList[math.floor(random.random()*len(rootList))]
-    return ""
+def nextSite():
+
+    response: Response = requests.get(siteCrawlerApi)
+    if response.status_code!=200:
+        logging.error("API sended not 200 code. code: %s" % str(response.status_code))
+        return ""
+    
+    return json.loads(response.text)["body"]["url"]
 
 def getRoot(path):
     reResult=re.match("^(http(s)?:\/\/)[A-Z|a-z|0-9|\-|.]+", path)
@@ -105,7 +117,8 @@ def access(targetPath):
     soup: BeautifulSoup = BeautifulSoup(response.text, features="lxml")
 
     # metaの"noindex"チェック
-    # for metatag in soup.find_all("meta", content="noindex"):
+    for metatag in soup.find_all("meta", content="noindex"):
+        return
 
     # metaの"nofollow"チェック
     for metatag in soup.find_all("meta", content="nofolow"):
@@ -137,21 +150,20 @@ def access(targetPath):
         add(fullPath, lastAccess=datetime.datetime(2020, 1, 1, 0, 0, 0))
 
 def store():
-    # 重複なしのルートリスト作成
-    rootList = []
-    if os.path.isfile("sitelist.csv"):
-        with open ("sitelist.csv", mode="r") as f :
-            reader = csv.reader(f)
-            for row in reader:
-                rootList.append(row[0])
-            for site in siteList:
-                rootList.append(site['Root'])
-            rootList = list(set(rootList))
 
-    # 書き込み
-    with open ("sitelist.csv", mode="w") as f :
-        for root in rootList:
-            f.write("%s\n" % root)
+    # ローカルの重複なしのルートサイトリスト作成
+    rootSiteList = []
+    for site in siteList:
+        rootSiteList.append(site['Root'])
+    rootSiteList = list(set(rootSiteList))
+
+    # POSTデータ作成
+    body = {"url_list":[]}
+    for rootSite in  rootSiteList:
+        body["url_list"].append({"url": rootSite})
+
+    # 保存(POST)
+    response: Response = requests.post(siteCrawlerApi, json.dumps(body))
         
 def isProtect(path):
     for word in protectList:
@@ -161,15 +173,20 @@ def isProtect(path):
 
 def main():
 
+    setApiUrl()
+
     # スクレイピング禁止サイトリスト取得
     getProtectList()
 
     for i in range(20):
         # 初期サイト設定
-        n = nextRoot()
-        siteList.append({'FullPath': n, 'Root': n, 'LastAccess': datetime.datetime(2020, 1, 1, 0, 0, 0)})
+        site = nextSite()
+        if site == "":
+            logging.error("Next site is empty")
+            return
+        siteList.append({'FullPath': site, 'Root': site, 'LastAccess': datetime.datetime(2020, 1, 1, 0, 0, 0)})
 
-        print("next: %s" % n)
+        print("next: %s" % site)
 
         # 初期サイトをベースに10回リンクをたどる
         for j in range(10):
