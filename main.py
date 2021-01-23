@@ -7,11 +7,14 @@ from dateutil.relativedelta import relativedelta
 import math
 import random
 import time
-import logging
 import os
 import csv
 from requests.exceptions import Timeout
 import json
+import wrapt_timeout_decorator
+import time
+
+import log
 
 # site_crawler API
 siteCrawlerApi = ""
@@ -26,8 +29,6 @@ def setApiUrl():
     global siteCrawlerApi
     with open('secret/secret.json') as f:
         sss = json.load(f)
-        # print(sss)
-        # print(sss["site_crawler_api"])
         siteCrawlerApi = sss["site_crawler_api"]
 
 
@@ -47,7 +48,7 @@ def nextSite():
 
     response: Response = requests.get(siteCrawlerApi)
     if response.status_code!=200:
-        logging.error("API sended not 200 code. code: %s" % str(response.status_code))
+        log.printE("API sended not 200 code. code: %s" % str(response.status_code))
         return ""
     
     return json.loads(response.text)["body"]["url"]
@@ -55,7 +56,7 @@ def nextSite():
 def getRoot(path):
     reResult=re.match("^(http(s)?:\/\/)[A-Z|a-z|0-9|\-|.]+", path)
     if reResult == None:
-        logging.error("Faild to get damaine neme '%s'" % (path))
+        log.printE("Faild to get damaine neme '%s'" % (path))
         return ""
     return reResult.group()
 
@@ -90,15 +91,18 @@ def access(targetPath):
     
     # 最終アクセスが現在時刻から2秒以内ならリターン
     if lastAccess >= datetime.datetime.now() - relativedelta(seconds=2):
-        logging.error("Last access is after 2 sec ago '%s'" % (lastAccess.strftime('%Y-%m-%d %H:%M:%S')))
+        log.printI("Last access is after 2 sec ago '%s'" % (lastAccess.strftime('%Y-%m-%d %H:%M:%S')))
         return
 
      # リトライは1回まで
     for i in range(2):
         try:
-            response: Response = requests.get(targetPath, timeout=(2.0, 5.0))
-        except Timeout:
-            logging.error("GET request timeout '%s'" % (targetPath))
+            @wrapt_timeout_decorator.timeout(dec_timeout=5.0)
+            def httpGet(targetPath):
+                return requests.get(targetPath, timeout=(3.0, 5.0))
+            response: Response = httpGet(targetPath)
+        except Exception as e:
+            log.printE("GET request exception: %s" % (e))
             return
         if response.status_code==200:
             break
@@ -110,7 +114,7 @@ def access(targetPath):
 
     # アクセス失敗
     if response.status_code!=200:
-        logging.error("Faild to access '%s'" % (targetPath))
+        log.printE("Faild to access '%s'" % (targetPath))
         return
 
     # パース
@@ -173,27 +177,29 @@ def isProtect(path):
 
 def main():
 
+    log.oepn()
+
     setApiUrl()
 
     # スクレイピング禁止サイトリスト取得
     getProtectList()
 
-    for i in range(20):
+    for i in range(100):
         # 初期サイト設定
         site = nextSite()
         if site == "":
-            logging.error("Next site is empty")
+            log.printE("Next site is empty")
             return
         siteList.append({'FullPath': site, 'Root': site, 'LastAccess': datetime.datetime(2020, 1, 1, 0, 0, 0)})
 
-        print("next: %s" % site)
+        log.printI("next: %s" % site)
 
         # 初期サイトをベースに10回リンクをたどる
         for j in range(10):
             # クローリングサイトリストからランダムなサイトを指定
             targetIndex = math.floor(random.random()*len(siteList))
 
-            print("  target: %s" % siteList[targetIndex]['FullPath'])
+            log.printI("  target: %s" % siteList[targetIndex]['FullPath'])
 
             # アクセス
             access(siteList[targetIndex]['FullPath'])
